@@ -5,7 +5,7 @@ set -euo pipefail
 print_usage() {
     >&2 echo "Usage: $0 <your.domain.com> [<dns server>]"
     >&2 echo ""
-    >&2 echo "your.domain.com   Base domain, e.g. dev.example.com → gitpod.dev.example.com and gitlab.dev.example.com"
+    >&2 echo "your.domain.com   Base domain, e.g. dev.example.com â†’ gitpod.dev.example.com and gitlab.dev.example.com"
     >&2 echo "dns server        DNS server that resolves your base domain. Optional, helpful when you DNS servers is not public reachable."
 }
 
@@ -35,22 +35,19 @@ if [[ -n "$DNSSERVER" ]]; then
     echo "Using DNS server: $DNSSERVER"
 fi
 
-
-
 echo "Removing existing installation if exists ..."
 
-k3d delete cluster gitlab || true
-k3d delete cluster gitpod || true
+k3d cluster delete gitlab || true
+k3d cluster delete gitpod || true
 docker stop nginx-proxy || true
-
 
 # GitLab
 echo "Installing GitLab cluster ..."
 
-k3d create cluster \
+k3d cluster create \
     -p 1443:443@loadbalancer \
     --k3s-server-arg --disable=traefik \
-    --switch \
+    --switch-context \
     gitlab
 
 if [[ -n "$DNSSERVER" ]]; then
@@ -59,7 +56,6 @@ if [[ -n "$DNSSERVER" ]]; then
         sed -e "s+.:53+$DOMAIN {\\\\n  forward . $DNSSERVER\\\\n}\\\\n.:53+g" | \
         kubectl apply -f -
 fi
-
 
 kubectl create secret tls tls-certs \
     --cert="$CERTS/fullchain.pem" \
@@ -72,16 +68,15 @@ helm install gitlab gitlab/gitlab \
     --set global.ingress.tls.secretName=tls-certs \
     --version 4.0.4
 
-
 # Gitpod
 echo "Installing Gitpod cluster ..."
 
 mkdir -p /tmp/workspaces
-k3d create cluster \
+k3d cluster create \
     -p 2443:443@loadbalancer \
     -v /tmp/workspaces:/var/gitpod/workspaces:shared \
     --k3s-server-arg --disable=traefik \
-    --switch \
+    --switch-context \
     gitpod
 
 if [[ -n "$DNSSERVER" ]]; then
@@ -95,7 +90,6 @@ docker exec k3d-gitpod-master-0 mount --make-shared /sys/fs/cgroup
 cd "$GPSH_DIR"
 helm repo add charts.gitpod.io https://charts.gitpod.io
 helm dep update
-
 
 # Newest helm leads to this error:
 # Error: template: gitpod-selfhosted/charts/gitpod/charts/minio/templates/deployment.yaml:192:20: executing "gitpod-selfhosted/charts/gitpod/charts/minio/templates/deployment.yaml" at <(not .Values.gcsgateway.enabled) (not .Values.azuregateway.enabled) (not .Values.s3gateway.enabled) (not .Values.b2gateway.enabled)>: can't give argument to non-function not .Values.gcsgateway.enabled
@@ -111,7 +105,6 @@ tar -czf gitpod-0.4.0.tgz gitpod/
 rm -r gitpod
 )
 
-
 helm upgrade --install -f values.yaml gitpod . \
     --timeout 60m \
     --set gitpod.hostname=gitpod.$DOMAIN \
@@ -123,10 +116,9 @@ cd -
 # We remove all network policies since there are issues for our setting that need to be fixed in the long term.
 kubectl delete networkpolicies.networking.k8s.io --all
 
-
 # Add GitLab OAuth config
 echo "Adding GitLab OAuth config ..."
-k3d get kubeconfig gitlab --switch
+k3d kubeconfig get gitlab --switch-context
 
 # Wait for GitLab DB
 echo "Waiting for GitLab DB ..."
@@ -135,7 +127,6 @@ echo ""
 DBPASSWD=$(kubectl get secret gitlab-postgresql-password -o jsonpath='{.data.postgresql-postgres-password}' | base64 --decode)
 SQL=$(sed "s+example.com+$DOMAIN+" "$GITLAB_DIR/insert_oauth_application.sql")
 kubectl exec -it gitlab-postgresql-0 -- bash -c "PGPASSWORD=$DBPASSWD psql -U postgres -d gitlabhq_production -c \"$SQL\""
-
 
 # Start reverse proxy
 echo "Starting reverse proxy ..."
